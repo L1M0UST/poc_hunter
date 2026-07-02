@@ -1,0 +1,17 @@
+source:
+  year: 2025
+  upstream_raw_url: "https://raw.githubusercontent.com/ycdxsb/PocOrExp_in_Github/main/{year}"
+
+github:
+  token_file: ".apikey"
+  timeout: 30
+  concurrency: 8
+
+package:
+  outbox_dir: "data/outbox"
+  max_files_per_repo: 8
+  max_file_bytes: 120000
+  max_repo_bytes: 480000
+
+state:
+  sqlite_path: "data/state/poc_hunter.sqlite"
