@@ -5,4 +5,4 @@ clickhouse:
   password: ""
   database: "default"
   secure: false
-  table: "exploit_signature"
+  table: "exploit_signature_distributed"

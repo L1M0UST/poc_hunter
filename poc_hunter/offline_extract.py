@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 
 from .task_builder import build_messages_from_task
-from .text_utils import parse_json_object, strip_think_tags
+from .text_utils import clean_llm_text, normalize_extraction_result, parse_json_object
 
 
 def _chat_completions_url() -> str:
@@ -60,15 +60,17 @@ def extract_tasks(tasks_path: Path, output_path: Path, *, package_dir: Path | No
             response = client.post(url, headers=_headers(), json=payload)
             response.raise_for_status()
             raw = _extract_content(response.json())
-            parsed: dict[str, Any] | None = parse_json_object(raw)
+            cleaned_raw = clean_llm_text(raw)
+            parsed: dict[str, Any] | None = parse_json_object(cleaned_raw)
+            normalized = normalize_extraction_result(parsed) if parsed is not None else None
             dst.write(
                 json.dumps(
                     {
                         "task_id": task["task_id"],
                         "cve": task["cve"],
                         "source_urls": task.get("source_urls", []),
-                        "raw_response": strip_think_tags(raw),
-                        "parsed": parsed,
+                        "raw_response": cleaned_raw,
+                        "parsed": normalized,
                     },
                     ensure_ascii=False,
                 )

@@ -20,7 +20,7 @@ def _filter_records_by_min_year(records: list[dict[str, str]], min_year: int) ->
 
 def print_schema() -> None:
     cfg = load_yaml(PROJECT_ROOT / "configs" / "clickhouse_config.yaml").get("clickhouse", {})
-    print(f"configured_table: {cfg.get('database', 'default')}.{cfg.get('table', 'exploit_signature')}")
+    print(f"configured_table: {cfg.get('database', 'default')}.{cfg.get('table', 'exploit_signature_distributed')}")
     print("configured_insert_columns:")
     for col in EXPLOIT_SIGNATURE_COLUMNS:
         print(f"- {col}")

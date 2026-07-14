@@ -12,6 +12,7 @@ import clickhouse_connect
 from .config import load_yaml, resolve_path
 from .schema import EXPLOIT_SIGNATURE_COLUMNS, EXPLOIT_SIGNATURE_RESULT_KEYS
 from .state import StateStore
+from .text_utils import clean_llm_text, normalize_extraction_result
 
 
 def _signature_hash(signature: dict[str, Any], source: str) -> str:
@@ -23,7 +24,7 @@ def _signature_hash(signature: dict[str, Any], source: str) -> str:
 
 
 def _signature_row(item: dict[str, Any]) -> tuple[tuple[str, ...], str] | None:
-    parsed = item.get("parsed") or {}
+    parsed = normalize_extraction_result(item.get("parsed") or {})
     if parsed.get("extractable") is not True:
         return None
     signature = parsed.get("signature") or {}
@@ -31,8 +32,8 @@ def _signature_row(item: dict[str, Any]) -> tuple[tuple[str, ...], str] | None:
     storage_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     row = tuple(
         [str(uuid.uuid4())]
-        + [str(signature.get(key, "") or "") for key in EXPLOIT_SIGNATURE_RESULT_KEYS[:-1]]
-        + [source, str(signature.get("description", "") or ""), storage_time]
+        + [clean_llm_text(str(signature.get(key, "") or "")) for key in EXPLOIT_SIGNATURE_RESULT_KEYS[:-1]]
+        + [source, clean_llm_text(str(signature.get("description", "") or "")), storage_time]
     )
     return row, _signature_hash(signature, source)
 
@@ -50,7 +51,7 @@ def import_results(results_path: Path, ck_config_path: Path, *, state_path: Path
         database=cfg.get("database", "default"),
         secure=cfg.get("secure", False),
     )
-    table = cfg.get("table", "exploit_signature")
+    table = cfg.get("table", "exploit_signature_distributed")
     rows: list[tuple[str, ...]] = []
     imported_marks: list[tuple[str, str, str]] = []
     try:
@@ -58,7 +59,10 @@ def import_results(results_path: Path, ck_config_path: Path, *, state_path: Path
             for line in results_path.read_text(encoding="utf-8").splitlines():
                 if not line.strip():
                     continue
-                parsed_row = _signature_row(json.loads(line))
+                item = json.loads(line)
+                if item.get("parsed") is None and item.get("raw_response"):
+                    item["parsed"] = normalize_extraction_result(item.get("raw_response"))
+                parsed_row = _signature_row(item)
                 if not parsed_row:
                     continue
                 row, signature_hash = parsed_row

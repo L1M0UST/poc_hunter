@@ -15,7 +15,7 @@ PoC/EXP collection pipeline for `ycdxsb/PocOrExp_in_Github`, scoped to CVE-2026 
 
 ## ClickHouse Schema
 
-Configured insert columns for `exploit_signature`:
+Configured insert columns for `exploit_signature_distributed`:
 
 ```text
 id
