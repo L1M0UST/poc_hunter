@@ -16,6 +16,8 @@ configs/path_config.yaml
 
 poc_download/
 data/outbox/
+data/transfer/
+data/offline/
 data/state/
 poc_hunter_offline.tar
 wheels/

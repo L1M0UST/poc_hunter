@@ -1,5 +1,5 @@
 source:
-  year: 2025
+  min_year: 2026
   upstream_raw_url: "https://raw.githubusercontent.com/ycdxsb/PocOrExp_in_Github/main/{year}"
 
 github:
@@ -9,9 +9,15 @@ github:
 
 package:
   outbox_dir: "data/outbox"
+  transfer_dir: "data/transfer"
   max_files_per_repo: 8
   max_file_bytes: 120000
   max_repo_bytes: 480000
+
+offline:
+  inbox_dir: "data/offline/inbox"
+  work_dir: "data/offline/work"
+  results_dir: "data/offline/results"
 
 state:
   sqlite_path: "data/state/poc_hunter.sqlite"

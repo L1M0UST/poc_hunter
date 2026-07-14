@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tarfile
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .config import PROJECT_ROOT, github_token, resolve_path
+from .config import github_token, resolve_path
 from .github_api import GitHubClient, is_probably_source_file, parse_github_repo
 from .schema import EXPECTED_JSON_SHAPE
 from .state import StateStore
@@ -27,14 +28,29 @@ RELEVANT_NAME_MARKERS = (
     "main",
 )
 
-
-SYSTEM_PROMPT = """你是安全检测数据抽取工程师。你的任务是从公开 PoC/EXP/README/漏洞描述中提取可用于流量检测的 Exploit Signature。
-只返回 JSON，不要返回解释。无法可靠提取时返回 {"extractable": false, "reason": "..."}。
-可以提取时返回 {"extractable": true, "signature": {...}}，signature 字段必须兼容目标表结构。"""
+SYSTEM_PROMPT = """You are an exploit-signature extraction engineer.
+Extract traffic-detection fields from public PoC, EXP, README, and CVE descriptions.
+Return JSON only. If evidence is insufficient, return {"extractable": false, "reason": "..."}.
+If extractable, return {"extractable": true, "signature": {...}} compatible with the target schema."""
 
 
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _write_blob(package_dir: Path, content: str) -> dict[str, Any]:
+    data = content.encode("utf-8", errors="ignore")
+    content_sha = hashlib.sha256(data).hexdigest()
+    rel_path = Path("evidence") / "blobs" / content_sha[:2] / content_sha
+    target = package_dir / rel_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists():
+        target.write_bytes(data)
+    return {
+        "content_sha256": content_sha,
+        "content_path": rel_path.as_posix(),
+        "content_bytes": len(data),
+    }
 
 
 def _select_files(tree: list[dict[str, Any]], *, max_files: int) -> list[dict[str, Any]]:
@@ -63,13 +79,40 @@ def _build_user_prompt(cve: str, description: str, repos: list[dict[str, Any]]) 
         "cve_description": description,
         "evidence_repos": repos,
         "rules": [
-            "优先提取 HTTP 路径、方法、Header、Body、响应状态码、响应内容指纹。",
-            "不要编造不存在的字段；证据不足时 extractable=false。",
-            "description 使用中文，保留必要英文产品名、漏洞类型和接口名。",
-            "source 不需要输出，入库程序会使用 evidence_repos 的 URL。",
+            "Prefer HTTP path, method, headers, body markers, response status, and response indicators.",
+            "Do not invent missing fields. Return extractable=false if evidence is too weak.",
+            "Use Chinese for description, while preserving product names, vulnerability classes, and endpoint names.",
+            "Do not output source or storage_time. The import program fills them.",
         ],
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def build_messages_from_task(task: dict[str, Any], package_dir: Path) -> list[dict[str, str]]:
+    repos: list[dict[str, Any]] = []
+    for repo in task.get("evidence_repos") or []:
+        selected_files = []
+        for file_info in repo.get("selected_files") or []:
+            content_path = package_dir / file_info["content_path"]
+            selected_files.append(
+                {
+                    "path": file_info.get("path", ""),
+                    "sha": file_info.get("sha", ""),
+                    "content_sha256": file_info.get("content_sha256", ""),
+                    "content": content_path.read_text(encoding="utf-8", errors="replace"),
+                }
+            )
+        repos.append(
+            {
+                "url": repo.get("url", ""),
+                "metadata": repo.get("metadata", {}),
+                "selected_files": selected_files,
+            }
+        )
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": _build_user_prompt(task.get("cve", ""), task.get("cve_description", ""), repos)},
+    ]
 
 
 def _collect_repo(
@@ -197,6 +240,7 @@ def build_task_package(
     manifest_path = target_dir / "manifest.json"
     task_count = 0
     repo_count = 0
+    blob_count = 0
 
     with StateStore(state_path) as state, tasks_path.open("w", encoding="utf-8") as out:
         for cve, repos in sorted(grouped.items()):
@@ -214,11 +258,23 @@ def build_task_package(
                 )
                 source_urls.append(repo_info["url"])
                 repo_hash_parts.append(f"{repo_info['repo_key']}:{repo_info['content_hash']}")
+                selected_files = []
+                for file_info in repo_info["selected_files"]:
+                    blob_info = _write_blob(target_dir, file_info["content"])
+                    if blob_info["content_bytes"]:
+                        blob_count += 1
+                    selected_files.append(
+                        {
+                            "path": file_info["path"],
+                            "sha": file_info.get("sha", ""),
+                            **blob_info,
+                        }
+                    )
                 evidence_repos.append(
                     {
                         "url": repo_info["url"],
                         "metadata": repo_info["metadata"],
-                        "selected_files": repo_info["selected_files"],
+                        "selected_files": selected_files,
                     }
                 )
 
@@ -229,23 +285,30 @@ def build_task_package(
             line = {
                 "task_id": task_id,
                 "cve": cve,
+                "cve_description": descriptions.get(cve, ""),
                 "source_urls": sorted(set(source_urls)),
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": _build_user_prompt(cve, descriptions.get(cve, ""), evidence_repos)},
-                ],
+                "evidence_repos": evidence_repos,
             }
             out.write(json.dumps(line, ensure_ascii=False) + "\n")
             state.mark_task(task_id, cve, str(tasks_path))
             task_count += 1
 
     manifest = {
+        "package_format": "poc-hunter-task-package-v2",
         "run_id": run_id,
         "tasks_path": str(tasks_path),
         "records_seen": len(scoped_records),
         "repos_collected": repo_count,
         "tasks_created": task_count,
+        "blob_files_written": blob_count,
         "source": "ycdxsb/PocOrExp_in_Github",
     }
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    transfer_dir = resolve_path(package_cfg.get("transfer_dir", "data/transfer"))
+    transfer_dir.mkdir(parents=True, exist_ok=True)
+    archive_path = transfer_dir / f"poc_hunter_tasks_{run_id}.tar.gz"
+    with tarfile.open(archive_path, "w:gz") as tar:
+        tar.add(target_dir, arcname=target_dir.name)
+    manifest["archive_path"] = str(archive_path)
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return target_dir

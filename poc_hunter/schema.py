@@ -10,6 +10,7 @@ EXPLOIT_SIGNATURE_COLUMNS = [
     "response_indicator",
     "source",
     "description",
+    "storage_time",
 ]
 
 EXPLOIT_SIGNATURE_RESULT_KEYS = [

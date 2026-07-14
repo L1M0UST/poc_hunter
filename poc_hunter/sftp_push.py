@@ -16,19 +16,22 @@ def _split_remote(remote: str) -> tuple[str, str]:
 
 
 def push_directory(local_dir: Path, remote: str, *, port: int = 22, identity_file: str | None = None) -> None:
-    local_dir = local_dir.resolve()
-    if not local_dir.is_dir():
-        raise FileNotFoundError(f"local_dir is not a directory: {local_dir}")
+    local_path = local_dir.resolve()
+    if not local_path.exists():
+        raise FileNotFoundError(f"local path does not exist: {local_path}")
 
     target, remote_path = _split_remote(remote)
-    batch_lines = [f"mkdir {remote_path}", f"cd {remote_path}"]
-    for path in sorted(local_dir.rglob("*")):
-        if path.is_dir():
-            rel = path.relative_to(local_dir).as_posix()
-            batch_lines.append(f"mkdir {rel}")
-        else:
-            rel = path.relative_to(local_dir).as_posix()
-            batch_lines.append(f"put {path} {rel}")
+    if local_path.is_file():
+        batch_lines = [f"put {local_path} {remote_path}"]
+    else:
+        batch_lines = [f"mkdir {remote_path}", f"cd {remote_path}"]
+        for path in sorted(local_path.rglob("*")):
+            if path.is_dir():
+                rel = path.relative_to(local_path).as_posix()
+                batch_lines.append(f"mkdir {rel}")
+            else:
+                rel = path.relative_to(local_path).as_posix()
+                batch_lines.append(f"put {path} {rel}")
 
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".sftp") as batch:
         batch.write("\n".join(batch_lines) + "\n")

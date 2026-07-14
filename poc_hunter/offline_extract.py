@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx
 
+from .task_builder import build_messages_from_task
 from .text_utils import parse_json_object, strip_think_tags
 
 
@@ -34,10 +35,11 @@ def _extract_content(response_json: dict[str, Any]) -> str:
     return str(message.get("content") or "")
 
 
-def extract_tasks(tasks_path: Path, output_path: Path) -> None:
+def extract_tasks(tasks_path: Path, output_path: Path, *, package_dir: Path | None = None) -> None:
     url = _chat_completions_url()
     model = os.getenv("OFFLINE_LLM_MODEL", "minmax2.7")
     timeout = float(os.getenv("OFFLINE_LLM_TIMEOUT", "180"))
+    package_dir = package_dir or tasks_path.parent
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with (
@@ -49,9 +51,10 @@ def extract_tasks(tasks_path: Path, output_path: Path) -> None:
             if not line.strip():
                 continue
             task = json.loads(line)
+            messages = task.get("messages") or build_messages_from_task(task, package_dir)
             payload = {
                 "model": model,
-                "messages": task["messages"],
+                "messages": messages,
                 "stream": False,
             }
             response = client.post(url, headers=_headers(), json=payload)
